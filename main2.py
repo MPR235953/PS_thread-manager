@@ -1,71 +1,52 @@
 import sys
 import threading
 import time
+from typing import Any
 
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-class MyThread(threading.Thread):
-    def __init__(self, id, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.id = id % 10
-        self.pointer = 0
-        self.__flag = threading.Event()  # The flag used to pause the thread
-        self.__flag.clear() # Set to True
-        self.__running = threading.Event()  # Used to stop the thread identification
-        self.__running.set()  # Set running to True
-
-    def run(self):
-        while self.__running.is_set():
-            self.__flag.wait()
-            char = chr(ord('A') + self.pointer)
-            if char == 'Z': break
-            print(char + str(self.id))
-            self.pointer += 1
-            time.sleep(0.5)
-
-    def pause(self):
-        self.__flag.clear()
-        time.sleep(3)
-        self.resume()
-
-    def resume(self):
-        self.__flag.set()
-
-    def stop(self):
-        self.__flag.set()  # Resume the thread from the suspended state, if it is already suspended
-        self.__running.clear()  # Set to False
-
 class Worker(QObject):
-    finished = pyqtSignal()
-    progress = pyqtSignal(str)
-
+    sig_update = pyqtSignal(str, name='sig_update')
+    sig_finished = pyqtSignal(int, name='sig_finished')
     def __init__(self, id, parent=None):
         super(Worker, self).__init__(parent)
+
         self.id = id % 10
         self.pointer = 0
         self.paused = True
-        self.lock = threading.Lock()
-        self.lock.acquire()
+        self.quit = False
 
-    def run(self):
+        self.thread = threading.Thread(target=self.task)
+        self.lock = threading.Lock()
+
+    def task(self):
         while True:
+            if self.quit: break
             if not self.paused:
                 char = chr(ord('A') + self.pointer)
                 if char == 'Z': break
-                self.progress.emit(char + str(self.id))
+                self.sig_update.emit(char + str(self.id) + '\n')
                 self.pointer += 1
-                QThread.msleep(500)
+                time.sleep(0.5)
             else: self.lock.acquire()
-        self.finished.emit()
+        self.sig_finished.emit(self.id)
 
     def pause(self):
         self.paused = True
 
-    def start(self):
+    def resume(self):
         self.paused = False
         self.lock.release()
+
+    def start(self):
+        self.thread.start()
+
+    def finish(self):
+        self.quit = True
+        self.lock.release()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -76,11 +57,11 @@ class MainWindow(QMainWindow):
 
         self.start_button = QPushButton("Start", self)
         self.start_button.setGeometry(20, 30, 89, 25)
-        self.start_button.clicked.connect(self.start_thread)
+        self.start_button.clicked.connect(self.resume_worker)
 
         self.stop_button = QPushButton("Stop", self)
         self.stop_button.setGeometry(20, 60, 89, 25)
-        self.stop_button.clicked.connect(self.pause_thread)
+        self.stop_button.clicked.connect(self.pause_worker)
 
         self.quit_button = QPushButton("Quit", self)
         self.quit_button.setGeometry(20, 90, 89, 25)
@@ -90,59 +71,71 @@ class MainWindow(QMainWindow):
         self.lb_thread_no.setGeometry(QRect(130, 10, 131, 17))
         self.lb_thread_no.setObjectName("lb_thread_no")
 
-        self.te_thread_no = QTextEdit(self)
-        self.te_thread_no.setGeometry(QRect(130, 40, 104, 70))
-        self.te_thread_no.setObjectName("te_thread_no")
+        self.sb_thread_no = QSpinBox(self)
+        self.sb_thread_no.setGeometry(QRect(130, 40, 104, 70))
+        self.sb_thread_no.setObjectName("sb_thread_no")
+        self.sb_thread_no.setMinimum(1)
+        self.sb_thread_no.setMaximum(10)
 
         self.te_terminal = QTextEdit(self)
         self.te_terminal.setGeometry(QRect(20, 130, 211, 421))
         self.te_terminal.setObjectName("te_terminal")
-
-        self.workers = []
-        self.threads = []
-
-        self.min_id = 1
-        self.max_id = 10
-
-        for i in range(0, 10):
-            self.init_thread(i+1)
+        self.te_terminal.setReadOnly(True)
 
         self.terminal_text = ""
 
-    def init_thread(self, id):
-        self.workers.append(Worker(id))
-        self.threads.append(QThread())
-        self.workers[-1].moveToThread(self.threads[-1])
-        self.workers[-1].progress.connect(self.update_progress)
-        self.workers[-1].finished.connect(self.threads[-1].quit)
-        self.workers[-1].finished.connect(self.workers[-1].deleteLater)
-        self.threads[-1].finished.connect(self.threads[-1].deleteLater)
-        self.threads[-1].started.connect(self.workers[-1].run)
-        self.threads[-1].start()
+        self.workers = []
+        for i in range(10):
+            self.init_worker(id=i+1)
 
-    def start_thread(self):
-        id = int(self.te_thread_no.toPlainText())
-        if id >= self.min_id and id <= self.max_id and self.workers[id-1] is not None:
-            self.workers[id-1].start()
-
-    def update_progress(self, i):
-        self.terminal_text += str(i) + '\n'
+    def update_terminal(self, msg: str):
+        self.terminal_text += msg
         self.te_terminal.setText(self.terminal_text)
+        self.te_terminal.verticalScrollBar().setValue(self.te_terminal.verticalScrollBar().maximum())
 
-    def pause_thread(self):
-        id = int(self.te_thread_no.toPlainText())
-        if id >= self.min_id and id <= self.max_id and self.workers[id-1] is not None:
-            self.workers[id - 1].pause()
+    def init_worker(self, id):
+        worker = Worker(id)
+        worker.sig_update.connect(self.update_terminal)
+        worker.sig_finished.connect(self.clear_worker)
+        worker.start()
+        self.workers.append(worker)
+        self.update_terminal("Worker " + str(id) + " initialized" + '\n')
 
-    def stop_thread(self):
-        id = int(self.te_thread_no.toPlainText())
-        if id >= self.min_id and id <= self.max_id and self.workers[id-1] is not None:
-            self.workers[id - 1].stop()
+    def find_worker(self, raw_id) -> Worker | None:
+        try:
+            w_id = int(raw_id)
+            for worker in self.workers:
+                if worker.id == w_id:
+                    return worker
+        except:
+            return None
+
+    def pause_worker(self):
+        raw_id = self.sb_thread_no.value()
+        worker = self.find_worker(raw_id)
+        if worker:
+            worker.pause()
+            self.update_terminal("Worker " + str(raw_id) + " paused" + '\n')
+
+    def resume_worker(self):
+        raw_id = self.sb_thread_no.value()
+        worker = self.find_worker(raw_id)
+        if worker:
+            worker.resume()
+            self.update_terminal("Worker " + str(raw_id) + " resumed" + '\n')
+        else:
+            self.init_worker(int(raw_id))
+
+    def clear_worker(self, i):
+        worker = self.find_worker(i)
+        worker.finish()
+        index = self.workers.index(worker)
+        del self.workers[index]
+        self.update_terminal("Worker " + str(i) + " finished" + '\n')
 
     def quit_app(self):
-        for id in range(0, 10):
-            if self.threads[id] is not None:
-                self.threads[id].quit()
+        for worker in self.workers:
+            worker.finish()
         QApplication.quit()
 
 if __name__ == "__main__":
