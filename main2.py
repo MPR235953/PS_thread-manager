@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import *
 
 class Worker(QObject):
     sig_update = pyqtSignal(str, name='sig_update')
+    sig_finished = pyqtSignal(int, name='sig_finished')
     def __init__(self, id, parent=None):
         super(Worker, self).__init__(parent)
 
@@ -32,6 +33,7 @@ class Worker(QObject):
                 time.sleep(0.1)
             else: self.lock.acquire()
         self.finished = True
+        self.sig_finished.emit(self.id)
 
     def pause(self):
         self.paused = True
@@ -102,6 +104,7 @@ class MainWindow(QMainWindow):
         ''' method to initialize worker object with a given id '''
         worker = Worker(id)
         worker.sig_update.connect(self.update_terminal)
+        worker.sig_finished.connect(self.finish_worker)
         worker.start()
         self.workers.append(worker)
         self.update_terminal("Worker " + str(id) + " waiting" + '\n')
@@ -112,7 +115,7 @@ class MainWindow(QMainWindow):
             if checkbox.isChecked():
                 w_id = int(checkbox.text())
                 if self.workers[w_id - 1].finished:
-                    self.update_terminal("Worker " + str(w_id) + " was finished" + '\n')
+                    self.update_terminal("Worker " + str(w_id) + " was already finished" + '\n')
                     continue
                 if self.workers[w_id - 1].paused:
                     self.update_terminal("Worker " + str(w_id) + " already paused" + '\n')
@@ -126,13 +129,17 @@ class MainWindow(QMainWindow):
             if checkbox.isChecked():
                 w_id = int(checkbox.text())
                 if self.workers[w_id - 1].finished:
-                    self.update_terminal("Worker " + str(w_id) + " was finished" + '\n')
+                    self.update_terminal("Worker " + str(w_id) + " was already finished" + '\n')
                     continue
                 if not self.workers[w_id - 1].paused:
                     self.update_terminal("Worker " + str(w_id) + " already running" + '\n')
                 else:
                     self.workers[w_id - 1].resume()
                     self.update_terminal("Worker " + str(w_id) + " resumed" + '\n')
+
+    def finish_worker(self, w_id: int) -> None:
+        if w_id == 0: w_id = 10
+        self.update_terminal("Worker " + str(w_id) + " was finished" + '\n')
 
     def quit_app(self) -> None:
         ''' close app by button '''
