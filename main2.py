@@ -53,7 +53,7 @@ class Worker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
-        self.setWindowTitle("PyQt5 Threads")
+        self.setWindowTitle(__file__.split('/')[-1])
         self.setGeometry(100, 100, 500, 300)
         self.resize(268, 598)
 
