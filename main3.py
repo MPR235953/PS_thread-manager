@@ -1,11 +1,11 @@
 import sys
 import threading
 import time
-from typing import Any
 
 from PyQt5.QtCore import *
-from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
+
+import utils
 
 class Worker(QObject):
     sig_update = pyqtSignal(str, name='sig_update')
@@ -31,7 +31,7 @@ class Worker(QObject):
                 break
             self.sig_update.emit(char + str(self.id) + '\n')
             self.pointer += 1
-            time.sleep(0.1)
+            time.sleep(utils.thread_pause)
 
     def start(self):
         self.thread.start()
