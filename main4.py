@@ -1,6 +1,6 @@
 import sys
 import threading
-import time
+import asyncio
 
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
@@ -10,45 +10,31 @@ import utils
 class Worker(QObject):
     sig_update = pyqtSignal(str, name='sig_update')
     sig_finished = pyqtSignal(int, name='sig_finished')
-    def __init__(self, id, parent=None):
+    def __init__(self, parent=None):
         super(Worker, self).__init__(parent)
 
-        self.id = id % 10
-        self.pointer = 0
-        self.paused = True
-        self.quit = False
-        self.finished = False
+        self.main_thread = threading.Thread(target=self.box_env)
+        self.killed_ids = {i: False for i in range(10)}
 
-        self.thread = threading.Thread(target=self.task)
-        self.lock = threading.Lock()
+    def kill_id(self, id: int):
+        if id in self.killed_ids.keys():
+            self.killed_ids[id] = True
 
-    def task(self):
+    def box_env(self):
+        loop = asyncio.new_event_loop()
+        tasks = [loop.create_task(self.task(i)) for i in range(10)]
+        loop.run_until_complete(asyncio.wait(tasks))
+
+    async def task(self, id):
+        pointer = 0
         while True:
-            if self.quit: break
-            if not self.paused:
-                char = chr(ord('A') + self.pointer)
-                if char == 'Z': break
-                self.sig_update.emit(char + str(self.id) + '\n')
-                self.pointer += 1
-                time.sleep(utils.thread_pause)
-            else: self.lock.acquire()
-        self.finished = True
-        self.sig_finished.emit(self.id)
-
-    def pause(self):
-        self.paused = True
-
-    def resume(self):
-        self.paused = False
-        self.lock.release()
-
-    def start(self):
-        self.thread.start()
-
-    def finish(self):
-        self.quit = True
-        if self.lock.locked():
-            self.lock.release()
+            if self.killed_ids[id]: break
+            char = chr(ord('A') + pointer)
+            if char == 'Z': break
+            self.sig_update.emit(char + str(id) + '\n')
+            pointer += 1
+            await asyncio.sleep(utils.thread_pause)
+        self.sig_finished.emit(id)
 
 
 class MainWindow(QMainWindow):
@@ -61,10 +47,12 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("Start", self)
         self.start_button.setGeometry(20, 30, 89, 25)
         self.start_button.clicked.connect(self.resume_worker)
+        self.start_button.setDisabled(True)
 
         self.stop_button = QPushButton("Stop", self)
         self.stop_button.setGeometry(20, 60, 89, 25)
         self.stop_button.clicked.connect(self.pause_worker)
+        self.stop_button.setDisabled(True)
 
         self.stop_button = QPushButton("Kill", self)
         self.stop_button.setGeometry(20, 90, 89, 25)
@@ -95,9 +83,7 @@ class MainWindow(QMainWindow):
 
         self.terminal_text = ""
 
-        self.workers = []
-        for i in range(10):
-            self.init_worker(id=i+1)
+        self.init_worker()
 
     def update_terminal(self, msg: str):
         ''' this method is called by worker to update terminal '''
@@ -105,14 +91,12 @@ class MainWindow(QMainWindow):
         self.te_terminal.setText(self.terminal_text)
         self.te_terminal.verticalScrollBar().setValue(self.te_terminal.verticalScrollBar().maximum())
 
-    def init_worker(self, id):
+    def init_worker(self):
         ''' method to initialize worker object with a given id '''
-        worker = Worker(id)
-        worker.sig_update.connect(self.update_terminal)
-        worker.sig_finished.connect(self.finish_worker)
-        worker.start()
-        self.workers.append(worker)
-        self.update_terminal("Worker " + str(id) + " waiting" + '\n')
+        self.worker = Worker()
+        self.worker.sig_update.connect(self.update_terminal)
+        self.worker.sig_finished.connect(self.finish_worker)
+        self.worker.main_thread.start()
 
     def pause_worker(self) -> None:
         ''' resume threads that checkboxes are checked and put info on terminal '''
@@ -147,7 +131,8 @@ class MainWindow(QMainWindow):
         for checkbox in self.checkboxes:
             if checkbox.isChecked() and checkbox.isEnabled():
                 w_id = int(checkbox.text())
-                self.workers[w_id - 1].finish()
+                if w_id == 10: w_id = 0
+                self.worker.kill_id(w_id)
                 checkbox.setDisabled(True)
                 checkbox.setChecked(False)
 
@@ -158,14 +143,14 @@ class MainWindow(QMainWindow):
 
     def quit_app(self) -> None:
         ''' close app by button '''
-        for worker in self.workers:
-            worker.finish()
+        for i in range(10):
+            self.worker.kill_id(i)
         QApplication.quit()
 
     def closeEvent(self, event) -> None:
         ''' close app by X '''
-        for worker in self.workers:
-            worker.finish()
+        for i in range(10):
+            self.worker.kill_id(i)
         QApplication.quit()
 
 if __name__ == "__main__":
